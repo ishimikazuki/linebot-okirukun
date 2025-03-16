@@ -79,11 +79,6 @@ console.log(
   process.env.CHANNEL_SECRET ? "設定済み" : "未設定",
 );
 
-const config = {
-  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.CHANNEL_SECRET,
-};
-
 if (!config.channelAccessToken || !config.channelSecret) {
   console.error("LINE Botの認証情報が設定されていません。");
   process.exit(1);
