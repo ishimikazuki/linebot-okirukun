@@ -41,6 +41,20 @@ const BOT_CONFIG = {
   },
 };
 
+// 環境変数の確認
+console.log('CHANNEL_ACCESS_TOKEN:', process.env.CHANNEL_ACCESS_TOKEN ? '設定済み' : '未設定');
+console.log('CHANNEL_SECRET:', process.env.CHANNEL_SECRET ? '設定済み' : '未設定');
+
+const config = {
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.CHANNEL_SECRET
+};
+
+if (!config.channelAccessToken || !config.channelSecret) {
+  console.error('LINE Botの認証情報が設定されていません。');
+  process.exit(1);
+}
+
 // イベントハンドラの修正 - @Bot接頭辞を削除
 async function handleEvent(event) {
   // メッセージイベント以外は無視
