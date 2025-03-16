@@ -14,11 +14,6 @@ const config = {
 // データ保存用のパス
 const dataFilePath = "./.data/bot-data.json";
 
-// フォルダが存在しない場合は作成
-if (!fs.existsSync("./.data")) {
-  fs.mkdirSync("./.data");
-}
-
 // データの初期化
 let botData = {
   users: {}, // ユーザー情報を格納
@@ -28,8 +23,6 @@ let botData = {
 };
 
 // フォルダが存在しない場合は作成
-const fs = require("fs");
-const path = require("path");
 if (!fs.existsSync("./.data")) {
   fs.mkdirSync("./.data");
 }
@@ -41,6 +34,13 @@ if (fs.existsSync(dataFilePath)) {
   } catch (error) {
     console.error("データ読み込みエラー:", error);
   }
+}
+
+// テスト用の時間設定関数を追加
+function setTestTime(hours, minutes) {
+  const testDate = new Date();
+  testDate.setHours(hours, minutes, 0, 0);
+  return testDate;
 }
 
 // データを保存する関数
@@ -110,12 +110,23 @@ async function handleEvent(event) {
     };
   }
 
-  // グループのユーザー情報を取得
-  const userInfo = botData.groups[groupId].users[userId];
+  // メンションを確認
+  const isMentioned =
+    event.message.mention &&
+    event.message.mention.mentionees &&
+    event.message.mention.mentionees.some(
+      (m) => m.userId === process.env.BOT_USER_ID,
+    );
 
-  // 起床時間設定のコマンド処理
-  if (text.match(/^@Bot\s+(.+)/i)) {
-    return handleCommand(event, text, userId, groupId, userName);
+  // 従来の「@Bot」コマンドか、Botへのメンションがある場合
+  if (text.match(/^@Bot\s+(.+)/i) || isMentioned) {
+    // メンションの場合は@Botプレフィックスを削除したテキストを使用
+    let commandText = text;
+    if (isMentioned) {
+      // メンション部分を削除してコマンドテキストを抽出
+      commandText = "@Bot " + text.replace(/@[\w]+/, "").trim();
+    }
+    return handleCommand(event, commandText, userId, groupId, userName);
   }
 
   // 起床報告の処理
@@ -141,6 +152,41 @@ function handleCommand(event, text, userId, groupId, userName) {
     command === "ジョーカー"
   ) {
     return handleJokerCommand(event, userId, groupId, userName);
+  }
+
+  // ジョーカー取り消しコマンド
+  if (
+    command === "ジョーカー取消" ||
+    command === "ジョーカー取り消し" ||
+    command === "ジョーカーキャンセル"
+  ) {
+    return handleJokerCancelCommand(event, userId, groupId, userName);
+  }
+
+  // テスト集計コマンド（開発者用）
+  if (command === "テスト集計") {
+    // テスト用に即時集計を実行
+    checkAllGroupReports();
+
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "テスト用に集計を実行しました。",
+    });
+  }
+
+  // テスト用時間設定
+  const testTimeMatch = command.match(/テスト時間(\d{1,2}):(\d{2})/);
+  if (testTimeMatch) {
+    const hours = parseInt(testTimeMatch[1]);
+    const minutes = parseInt(testTimeMatch[2]);
+
+    // グローバル変数に現在時刻を保存（本番環境では削除すること）
+    global.testTime = setTestTime(hours, minutes);
+
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: `テスト用時間を${hours}:${minutes.toString().padStart(2, "0")}に設定しました。`,
+    });
   }
 
   // 起床時間設定コマンド
@@ -176,6 +222,7 @@ function handleCommand(event, text, userId, groupId, userName) {
 ・起床時間設定: @Bot 明日7:00に起きる
 ・起床報告: 「起きた！」とメッセージを送る
 ・ジョーカー: @Bot ジョーカー (22時までに宣言で翌日パス、週1回のみ)
+・ジョーカー取消: @Bot ジョーカー取消
 ・毎日12:00に全員の結果を集計します`,
     });
   }
@@ -225,7 +272,7 @@ function isWakeupReport(text) {
 
 // 起床報告処理関数
 function handleWakeupReport(event, userId, groupId, userName) {
-  const now = new Date();
+  const now = global.testTime || new Date();
   const userInfo = botData.groups[groupId].users[userId];
 
   // 起床時間が設定されていない場合
@@ -271,7 +318,7 @@ function isSameDay(date1, date2) {
 
 // ジョーカーコマンド処理関数
 function handleJokerCommand(event, userId, groupId, userName) {
-  const now = new Date();
+  const now = global.testTime || new Date();
   const userInfo = botData.groups[groupId].users[userId];
 
   // 現在の時刻が22時以降の場合はジョーカーを使用できない
@@ -315,6 +362,29 @@ function handleJokerCommand(event, userId, groupId, userName) {
   });
 }
 
+// ジョーカー取り消し処理関数
+function handleJokerCancelCommand(event, userId, groupId, userName) {
+  const userInfo = botData.groups[groupId].users[userId];
+
+  // ジョーカーを使用していない場合
+  if (!userInfo.jokerUsed) {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "ジョーカーを使用していないため、取り消しできません。",
+    });
+  }
+
+  // ジョーカーを取り消す
+  userInfo.jokerUsed = false;
+  userInfo.weekJokerCount -= 1; // 使用回数を元に戻す
+  saveData();
+
+  return client.replyMessage(event.replyToken, {
+    type: "text",
+    text: `${userName}さん、ジョーカーの使用を取り消しました。明日の早起きは通常通り必要です。`,
+  });
+}
+
 // 週の開始日（日曜日）を取得
 function getWeekStartDate() {
   const now = new Date();
@@ -332,7 +402,7 @@ cron.schedule("0 12 * * *", () => {
 
 // 全グループのレポートをチェック
 async function checkAllGroupReports() {
-  const now = new Date();
+  const now = global.testTime || new Date();
 
   for (const groupId in botData.groups) {
     const groupInfo = botData.groups[groupId];
@@ -360,7 +430,7 @@ async function checkAllGroupReports() {
       const lastReport = userInfo.lastReport;
 
       // 今日の予定起床時刻を作成
-      const todayWakeupTime = new Date();
+      const todayWakeupTime = new Date(now);
       todayWakeupTime.setHours(wakeupTime.hours, wakeupTime.minutes, 0, 0);
 
       // 起床報告がない、または遅れた場合は失敗
@@ -417,3 +487,10 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
+// Keep-alive機能を完全に無効化（コメントアウト）
+/*
+setInterval(() => {
+  http.get(`http://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`);
+}, 280000);
+*/

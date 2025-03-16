@@ -1,0 +1,36 @@
+{
+  "users": {},
+  "groups": {
+    "C12a1582b4f0a01b2989ce79a40a6b5fb": {
+      "users": {
+        "U908829e33a3fff4ad87f1a4dd62fab29": {
+          "name": "石見紀希",
+          "wakeupTime": null,
+          "lastReport": null,
+          "todayReported": false,
+          "jokerUsed": true,
+          "lastJokerDate": "2025-03-16T16:44:08.118Z",
+          "weekJokerCount": 1,
+          "weekStartDate": "2025-03-16T00:00:00.000Z"
+        },
+        "U258794757adf156e548021c84872e89a": {
+          "name": "yoko",
+          "wakeupTime": {
+            "hours": 8,
+            "minutes": 0
+          },
+          "lastReport": null,
+          "todayReported": false,
+          "jokerUsed": false,
+          "lastJokerDate": null,
+          "weekJokerCount": 0,
+          "weekStartDate": "2025-03-16T00:00:00.000Z"
+        }
+      },
+      "currentStreak": 0,
+      "bestStreak": 0
+    }
+  },
+  "streakRecord": 0,
+  "currentStreak": 0
+}
