@@ -1,3 +1,32 @@
+const express = require('express');
+const line = require('@line/bot-sdk');
+
+// LINE Bot SDK の設定
+const config = {
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.CHANNEL_SECRET
+};
+
+const client = new line.Client(config);
+const app = express();
+
+// Webhookのエンドポイント
+app.post('/webhook', line.middleware(config), (req, res) => {
+  Promise
+    .all(req.body.events.map(handleEvent))
+    .then((result) => res.json(result))
+    .catch((err) => {
+      console.error(err);
+      res.status(500).end();
+    });
+});
+
+// サーバーを起動
+const port = process.env.PORT || 3000;
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Server is running on port ${port}`);
+});
+
 // Bot設定・メッセージ
 const BOT_CONFIG = {
   commands: {
