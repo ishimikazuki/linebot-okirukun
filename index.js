@@ -1,19 +1,18 @@
-const express = require('express');
-const line = require('@line/bot-sdk');
+const express = require("express");
+const line = require("@line/bot-sdk");
 
 // LINE Bot SDK の設定
 const config = {
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.CHANNEL_SECRET
+  channelSecret: process.env.CHANNEL_SECRET,
 };
 
 const client = new line.Client(config);
 const app = express();
 
 // Webhookのエンドポイント
-app.post('/webhook', line.middleware(config), (req, res) => {
-  Promise
-    .all(req.body.events.map(handleEvent))
+app.post("/webhook", line.middleware(config), (req, res) => {
+  Promise.all(req.body.events.map(handleEvent))
     .then((result) => res.json(result))
     .catch((err) => {
       console.error(err);
@@ -23,7 +22,7 @@ app.post('/webhook', line.middleware(config), (req, res) => {
 
 // サーバーを起動
 const port = process.env.PORT || 3000;
-app.listen(port, '0.0.0.0', () => {
+app.listen(port, "0.0.0.0", () => {
   console.log(`Server is running on port ${port}`);
 });
 
@@ -71,16 +70,22 @@ const BOT_CONFIG = {
 };
 
 // 環境変数の確認
-console.log('CHANNEL_ACCESS_TOKEN:', process.env.CHANNEL_ACCESS_TOKEN ? '設定済み' : '未設定');
-console.log('CHANNEL_SECRET:', process.env.CHANNEL_SECRET ? '設定済み' : '未設定');
+console.log(
+  "CHANNEL_ACCESS_TOKEN:",
+  process.env.CHANNEL_ACCESS_TOKEN ? "設定済み" : "未設定",
+);
+console.log(
+  "CHANNEL_SECRET:",
+  process.env.CHANNEL_SECRET ? "設定済み" : "未設定",
+);
 
 const config = {
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.CHANNEL_SECRET
+  channelSecret: process.env.CHANNEL_SECRET,
 };
 
 if (!config.channelAccessToken || !config.channelSecret) {
-  console.error('LINE Botの認証情報が設定されていません。');
+  console.error("LINE Botの認証情報が設定されていません。");
   process.exit(1);
 }
 
