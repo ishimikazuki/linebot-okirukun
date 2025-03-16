@@ -81,7 +81,14 @@ async function handleEvent(event) {
   // ユーザー名を取得
   let userName = "ユーザー";
   try {
-    const profile = await client.getGroupMemberProfile(groupId, userId);
+    let profile;
+    if (event.source.type === "group") {
+      profile = await client.getGroupMemberProfile(groupId, userId);
+    } else if (event.source.type === "room") {
+      profile = await client.getRoomMemberProfile(groupId, userId);
+    } else {
+      profile = await client.getProfile(userId);
+    }
     userName = profile.displayName;
   } catch (error) {
     console.error("プロフィール取得エラー:", error);
