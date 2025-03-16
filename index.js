@@ -14,6 +14,11 @@ const config = {
 // データ保存用のパス
 const dataFilePath = "./.data/bot-data.json";
 
+// フォルダが存在しない場合は作成
+if (!fs.existsSync("./.data")) {
+  fs.mkdirSync("./.data");
+}
+
 // データの初期化
 let botData = {
   users: {}, // ユーザー情報を格納
