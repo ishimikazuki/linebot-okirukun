@@ -5,12 +5,15 @@
       "users": {
         "U908829e33a3fff4ad87f1a4dd62fab29": {
           "name": "石見紀希",
-          "wakeupTime": null,
+          "wakeupTime": {
+            "hours": 10,
+            "minutes": 0
+          },
           "lastReport": null,
           "todayReported": false,
-          "jokerUsed": true,
+          "jokerUsed": false,
           "lastJokerDate": "2025-03-16T16:44:08.118Z",
-          "weekJokerCount": 1,
+          "weekJokerCount": 0,
           "weekStartDate": "2025-03-16T00:00:00.000Z"
         },
         "U258794757adf156e548021c84872e89a": {

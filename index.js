@@ -1,73 +1,47 @@
-// 必要なパッケージのインポート
-const express = require("express");
-const line = require("@line/bot-sdk");
-const cron = require("node-cron");
-const fs = require("fs");
-const path = require("path");
-
-// 設定
-const config = {
-  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.CHANNEL_SECRET,
+// Bot設定・メッセージ
+const BOT_CONFIG = {
+  commands: {
+    setWakeupTime: /(\d{1,2})(?::|(時))(\d{0,2})に起きる/,
+    goodSleep: ["ぐっすり", "明日パス", "明日休み"],
+    goodSleepCancel: ["ぐっすり取消", "ぐっすり取り消し", "ぐっすりキャンセル"],
+    recordCheck: ["記録確認", "記録"],
+    settingsCheck: ["設定確認", "設定"],
+    help: ["使い方", "ヘルプ", "help"],
+  },
+  messages: {
+    wakeupSuccess: "{userName}さん、起床報告を記録しました✔️",
+    wakeupAlreadyReported: "今日はすでに起床報告済みです！",
+    timeSetSuccess: "OK！{hours}:{minutes}に設定しました⏰",
+    timeFormatError:
+      "時間の形式が正しくありません。例: 7時に起きる または 7:00に起きる",
+    noTimeSet:
+      "起床時間が設定されていません。\n7時に起きる で設定してください。",
+    goodSleepSuccess:
+      "{userName}さん、明日の早起きはパスします。ゆっくりぐっすり眠ってください😴\n（週に1回のぐっすり機能を使用しました）",
+    goodSleepTimeLimit: "ぐっすり機能は22時までに宣言する必要があります。",
+    goodSleepWeeklyLimit: "ぐっすり機能は週に1回しか使用できません。",
+    goodSleepCancelSuccess:
+      "{userName}さん、ぐっすり機能の使用を取り消しました。明日の早起きは通常通り必要です。",
+    goodSleepNotUsed: "ぐっすり機能を使用していないため、取り消しできません。",
+    allSuccess: "全員が時間通りに起きました！連続記録は{streak}日目です🎉",
+    someoneFailure:
+      "⚠️ {failedUsers}さんが寝坊しました…連続記録はリセットされます💀\n（{oldStreak}日でした）",
+    helpText: `【使い方】
+・起床時間設定: 7時に起きる (7:00でも可)
+・起床報告: 「起きた！」とメッセージを送る
+・ぐっすり機能: ぐっすり (22時までに宣言で翌日パス、週1回のみ)
+・ぐっすり取消: ぐっすり取消
+・記録確認: 記録確認
+・設定確認: 設定確認
+・毎日12:00に全員の結果を集計します`,
+    recordStatus: "現在の連続記録: {streak}日\n最高連続記録: {best}日",
+    userSettings: "{userName}さんの起床時間: {hours}:{minutes}",
+    unknownCommand:
+      "コマンドが認識できませんでした。\n「使い方」でヘルプを表示します。",
+  },
 };
 
-// データ保存用のパス
-const dataFilePath = "./.data/bot-data.json";
-
-// データの初期化
-let botData = {
-  users: {}, // ユーザー情報を格納
-  groups: {}, // グループ情報を格納
-  streakRecord: 0, // 最高連続記録
-  currentStreak: 0, // 現在の連続記録
-};
-
-// フォルダが存在しない場合は作成
-if (!fs.existsSync("./.data")) {
-  fs.mkdirSync("./.data");
-}
-
-// データファイルが存在する場合は読み込む
-if (fs.existsSync(dataFilePath)) {
-  try {
-    botData = JSON.parse(fs.readFileSync(dataFilePath, "utf8"));
-  } catch (error) {
-    console.error("データ読み込みエラー:", error);
-  }
-}
-
-// テスト用の時間設定関数を追加
-function setTestTime(hours, minutes) {
-  const testDate = new Date();
-  testDate.setHours(hours, minutes, 0, 0);
-  return testDate;
-}
-
-// データを保存する関数
-function saveData() {
-  try {
-    fs.writeFileSync(dataFilePath, JSON.stringify(botData, null, 2));
-  } catch (error) {
-    console.error("データ保存エラー:", error);
-  }
-}
-
-const app = express();
-
-// LINE SDKの設定
-const client = new line.Client(config);
-
-// Webhookルート
-app.post("/webhook", line.middleware(config), (req, res) => {
-  Promise.all(req.body.events.map(handleEvent))
-    .then((result) => res.json(result))
-    .catch((err) => {
-      console.error(err);
-      res.status(500).end();
-    });
-});
-
-// イベントハンドラ
+// イベントハンドラの修正 - @Bot接頭辞を削除
 async function handleEvent(event) {
   // メッセージイベント以外は無視
   if (event.type !== "message" || event.message.type !== "text") {
@@ -117,23 +91,41 @@ async function handleEvent(event) {
     };
   }
 
-  // メンションを確認
-  const isMentioned =
-    event.message.mention &&
-    event.message.mention.mentionees &&
-    event.message.mention.mentionees.some(
-      (m) => m.userId === process.env.BOT_USER_ID,
+  // 起床時間設定コマンド
+  const timeSettingMatch = text.match(BOT_CONFIG.commands.setWakeupTime);
+  if (timeSettingMatch) {
+    return handleTimeSettingCommand(
+      event,
+      timeSettingMatch,
+      userId,
+      groupId,
+      userName,
     );
+  }
 
-  // 従来の「@Bot」コマンドか、Botへのメンションがある場合
-  if (text.match(/^@Bot\s+(.+)/i) || isMentioned) {
-    // メンションの場合は@Botプレフィックスを削除したテキストを使用
-    let commandText = text;
-    if (isMentioned) {
-      // メンション部分を削除してコマンドテキストを抽出
-      commandText = "@Bot " + text.replace(/@[\w]+/, "").trim();
-    }
-    return handleCommand(event, commandText, userId, groupId, userName);
+  // ぐっすりコマンド
+  if (BOT_CONFIG.commands.goodSleep.some((cmd) => text.trim() === cmd)) {
+    return handleGoodSleepCommand(event, userId, groupId, userName);
+  }
+
+  // ぐっすり取り消しコマンド
+  if (BOT_CONFIG.commands.goodSleepCancel.some((cmd) => text.trim() === cmd)) {
+    return handleGoodSleepCancelCommand(event, userId, groupId, userName);
+  }
+
+  // 記録確認コマンド
+  if (BOT_CONFIG.commands.recordCheck.some((cmd) => text.trim() === cmd)) {
+    return handleRecordCommand(event, userId, groupId);
+  }
+
+  // 設定確認コマンド
+  if (BOT_CONFIG.commands.settingsCheck.some((cmd) => text.trim() === cmd)) {
+    return handleSettingsCommand(event, userId, groupId, userName);
+  }
+
+  // ヘルプコマンド
+  if (BOT_CONFIG.commands.help.some((cmd) => text.trim() === cmd)) {
+    return handleHelpCommand(event);
   }
 
   // 起床報告の処理
@@ -145,194 +137,49 @@ async function handleEvent(event) {
   return Promise.resolve(null);
 }
 
-// コマンド処理関数
-function handleCommand(event, text, userId, groupId, userName) {
-  const commandMatch = text.match(/^@Bot\s+(.+)/i);
-  if (!commandMatch) return Promise.resolve(null);
+// 起床時間設定コマンド処理
+function handleTimeSettingCommand(
+  event,
+  timeSettingMatch,
+  userId,
+  groupId,
+  userName,
+) {
+  const hours = parseInt(timeSettingMatch[1]);
+  // 分が省略されている場合は0分とする
+  const minutes = timeSettingMatch[3] ? parseInt(timeSettingMatch[3]) : 0;
 
-  const command = commandMatch[1].trim();
-
-  // ジョーカー使用コマンド
-  if (
-    command === "明日パス" ||
-    command === "明日休み" ||
-    command === "ジョーカー"
-  ) {
-    return handleJokerCommand(event, userId, groupId, userName);
-  }
-
-  // ジョーカー取り消しコマンド
-  if (
-    command === "ジョーカー取消" ||
-    command === "ジョーカー取り消し" ||
-    command === "ジョーカーキャンセル"
-  ) {
-    return handleJokerCancelCommand(event, userId, groupId, userName);
-  }
-
-  // テスト集計コマンド（開発者用）
-  if (command === "テスト集計") {
-    // テスト用に即時集計を実行
-    checkAllGroupReports();
-
+  // 時間のバリデーション
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "テスト用に集計を実行しました。",
+      text: BOT_CONFIG.messages.timeFormatError,
     });
   }
 
-  // テスト用時間設定
-  const testTimeMatch = command.match(/テスト時間(\d{1,2}):(\d{2})/);
-  if (testTimeMatch) {
-    const hours = parseInt(testTimeMatch[1]);
-    const minutes = parseInt(testTimeMatch[2]);
-
-    // グローバル変数に現在時刻を保存（本番環境では削除すること）
-    global.testTime = setTestTime(hours, minutes);
-
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: `テスト用時間を${hours}:${minutes.toString().padStart(2, "0")}に設定しました。`,
-    });
-  }
-
-  // 起床時間設定コマンド
-  const timeSettingMatch = command.match(/明日は?(\d{1,2}):(\d{2})に起きる/);
-  if (timeSettingMatch) {
-    const hours = parseInt(timeSettingMatch[1]);
-    const minutes = parseInt(timeSettingMatch[2]);
-
-    // 時間のバリデーション
-    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
-      return client.replyMessage(event.replyToken, {
-        type: "text",
-        text: "時間の形式が正しくありません。例: @Bot 明日7:00に起きる",
-      });
-    }
-
-    // 起床時間を設定
-    botData.groups[groupId].users[userId].wakeupTime = { hours, minutes };
-    botData.groups[groupId].users[userId].todayReported = false;
-    saveData();
-
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: `OK！${hours}:${minutes.toString().padStart(2, "0")}に設定しました⏰`,
-    });
-  }
-
-  // ヘルプコマンド
-  if (command === "ヘルプ" || command === "help") {
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: `【使い方】
-・起床時間設定: @Bot 明日7:00に起きる
-・起床報告: 「起きた！」とメッセージを送る
-・ジョーカー: @Bot ジョーカー (22時までに宣言で翌日パス、週1回のみ)
-・ジョーカー取消: @Bot ジョーカー取消
-・毎日12:00に全員の結果を集計します`,
-    });
-  }
-
-  // 記録確認コマンド
-  if (command === "記録" || command === "record") {
-    const streak = botData.groups[groupId].currentStreak;
-    const best = botData.groups[groupId].bestStreak;
-
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: `現在の連続記録: ${streak}日\n最高連続記録: ${best}日`,
-    });
-  }
-
-  // 設定確認コマンド
-  if (command === "設定" || command === "settings") {
-    const userInfo = botData.groups[groupId].users[userId];
-    const wakeupTime = userInfo.wakeupTime;
-
-    if (!wakeupTime) {
-      return client.replyMessage(event.replyToken, {
-        type: "text",
-        text: "起床時間が設定されていません。\n@Bot 明日7:00に起きる で設定してください。",
-      });
-    }
-
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: `${userName}さんの起床時間: ${wakeupTime.hours}:${wakeupTime.minutes.toString().padStart(2, "0")}`,
-    });
-  }
-
-  // 不明なコマンド
-  return client.replyMessage(event.replyToken, {
-    type: "text",
-    text: "コマンドが認識できませんでした。\n@Bot help でヘルプを表示します。",
-  });
-}
-
-// 起床報告かどうかを判定
-function isWakeupReport(text) {
-  // 起床報告として認識するワード
-  const wakeupKeywords = ["起きた", "起床", "おはよう", "朝"];
-  return wakeupKeywords.some((keyword) => text.includes(keyword));
-}
-
-// 起床報告処理関数
-function handleWakeupReport(event, userId, groupId, userName) {
-  const now = global.testTime || new Date();
-  const userInfo = botData.groups[groupId].users[userId];
-
-  // 起床時間が設定されていない場合
-  if (!userInfo.wakeupTime) {
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: "起床時間が設定されていません。\n@Bot 明日7:00に起きる で設定してください。",
-    });
-  }
-
-  // 同じ日に二回目の報告の場合
-  if (isSameDay(now, userInfo.lastReport) && userInfo.todayReported) {
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: "今日はすでに起床報告済みです！",
-    });
-  }
-
-  // 起床報告を記録
-  userInfo.lastReport = now;
-  userInfo.todayReported = true;
+  // 起床時間を設定
+  botData.groups[groupId].users[userId].wakeupTime = { hours, minutes };
+  botData.groups[groupId].users[userId].todayReported = false;
   saveData();
 
   return client.replyMessage(event.replyToken, {
     type: "text",
-    text: `${userName}さん、起床報告を記録しました✔️`,
+    text: BOT_CONFIG.messages.timeSetSuccess
+      .replace("{hours}", hours)
+      .replace("{minutes}", minutes.toString().padStart(2, "0")),
   });
 }
 
-// 同じ日かどうかをチェック
-function isSameDay(date1, date2) {
-  if (!date1 || !date2) return false;
-
-  const d1 = new Date(date1);
-  const d2 = new Date(date2);
-
-  return (
-    d1.getFullYear() === d2.getFullYear() &&
-    d1.getMonth() === d2.getMonth() &&
-    d1.getDate() === d2.getDate()
-  );
-}
-
-// ジョーカーコマンド処理関数
-function handleJokerCommand(event, userId, groupId, userName) {
+// ぐっすりコマンド処理
+function handleGoodSleepCommand(event, userId, groupId, userName) {
   const now = global.testTime || new Date();
   const userInfo = botData.groups[groupId].users[userId];
 
-  // 現在の時刻が22時以降の場合はジョーカーを使用できない
+  // 現在の時刻が22時以降の場合はぐっすりを使用できない
   if (now.getHours() >= 22) {
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "ジョーカーは22時までに宣言する必要があります。",
+      text: BOT_CONFIG.messages.goodSleepTimeLimit,
     });
   }
 
@@ -353,11 +200,11 @@ function handleJokerCommand(event, userId, groupId, userName) {
   if (userInfo.weekJokerCount >= 1) {
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "ジョーカーは週に1回しか使用できません。",
+      text: BOT_CONFIG.messages.goodSleepWeeklyLimit,
     });
   }
 
-  // ジョーカーを設定
+  // ぐっすりを設定
   userInfo.jokerUsed = true;
   userInfo.lastJokerDate = now;
   userInfo.weekJokerCount += 1;
@@ -365,49 +212,111 @@ function handleJokerCommand(event, userId, groupId, userName) {
 
   return client.replyMessage(event.replyToken, {
     type: "text",
-    text: `${userName}さん、明日の早起きはパスします。ゆっくり休んでください😴\n（週に1回のジョーカーを使用しました）`,
+    text: BOT_CONFIG.messages.goodSleepSuccess.replace("{userName}", userName),
   });
 }
 
-// ジョーカー取り消し処理関数
-function handleJokerCancelCommand(event, userId, groupId, userName) {
+// ぐっすり取り消し処理
+function handleGoodSleepCancelCommand(event, userId, groupId, userName) {
   const userInfo = botData.groups[groupId].users[userId];
 
-  // ジョーカーを使用していない場合
+  // ぐっすりを使用していない場合
   if (!userInfo.jokerUsed) {
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "ジョーカーを使用していないため、取り消しできません。",
+      text: BOT_CONFIG.messages.goodSleepNotUsed,
     });
   }
 
-  // ジョーカーを取り消す
+  // ぐっすりを取り消す
   userInfo.jokerUsed = false;
   userInfo.weekJokerCount -= 1; // 使用回数を元に戻す
   saveData();
 
   return client.replyMessage(event.replyToken, {
     type: "text",
-    text: `${userName}さん、ジョーカーの使用を取り消しました。明日の早起きは通常通り必要です。`,
+    text: BOT_CONFIG.messages.goodSleepCancelSuccess.replace(
+      "{userName}",
+      userName,
+    ),
   });
 }
 
-// 週の開始日（日曜日）を取得
-function getWeekStartDate() {
-  const now = new Date();
-  const day = now.getDay(); // 0が日曜日、6が土曜日
-  const diff = now.getDate() - day;
-  const sunday = new Date(now.setDate(diff));
-  sunday.setHours(0, 0, 0, 0);
-  return sunday;
+// 記録確認コマンド
+function handleRecordCommand(event, userId, groupId) {
+  const streak = botData.groups[groupId].currentStreak;
+  const best = botData.groups[groupId].bestStreak;
+
+  return client.replyMessage(event.replyToken, {
+    type: "text",
+    text: BOT_CONFIG.messages.recordStatus
+      .replace("{streak}", streak)
+      .replace("{best}", best),
+  });
 }
 
-// 毎日12時に実行するクロンジョブ
-cron.schedule("0 12 * * *", () => {
-  checkAllGroupReports();
-});
+// 設定確認コマンド
+function handleSettingsCommand(event, userId, groupId, userName) {
+  const userInfo = botData.groups[groupId].users[userId];
+  const wakeupTime = userInfo.wakeupTime;
 
-// 全グループのレポートをチェック
+  if (!wakeupTime) {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: BOT_CONFIG.messages.noTimeSet,
+    });
+  }
+
+  return client.replyMessage(event.replyToken, {
+    type: "text",
+    text: BOT_CONFIG.messages.userSettings
+      .replace("{userName}", userName)
+      .replace("{hours}", wakeupTime.hours)
+      .replace("{minutes}", wakeupTime.minutes.toString().padStart(2, "0")),
+  });
+}
+
+// ヘルプコマンド
+function handleHelpCommand(event) {
+  return client.replyMessage(event.replyToken, {
+    type: "text",
+    text: BOT_CONFIG.messages.helpText,
+  });
+}
+
+// 起床報告処理関数
+function handleWakeupReport(event, userId, groupId, userName) {
+  const now = global.testTime || new Date();
+  const userInfo = botData.groups[groupId].users[userId];
+
+  // 起床時間が設定されていない場合
+  if (!userInfo.wakeupTime) {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: BOT_CONFIG.messages.noTimeSet,
+    });
+  }
+
+  // 同じ日に二回目の報告の場合
+  if (isSameDay(now, userInfo.lastReport) && userInfo.todayReported) {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: BOT_CONFIG.messages.wakeupAlreadyReported,
+    });
+  }
+
+  // 起床報告を記録
+  userInfo.lastReport = now;
+  userInfo.todayReported = true;
+  saveData();
+
+  return client.replyMessage(event.replyToken, {
+    type: "text",
+    text: BOT_CONFIG.messages.wakeupSuccess.replace("{userName}", userName),
+  });
+}
+
+// 全グループのレポートをチェック（失敗時のメッセージカスタマイズ含む）
 async function checkAllGroupReports() {
   const now = global.testTime || new Date();
 
@@ -426,10 +335,10 @@ async function checkAllGroupReports() {
       // 起床時間が設定されていない場合はスキップ
       if (!userInfo.wakeupTime) continue;
 
-      // ジョーカーを使用している場合は成功扱い
+      // ぐっすりを使用している場合は成功扱い
       if (userInfo.jokerUsed) {
-        successful.push(`${userInfo.name}(ジョーカー)`);
-        userInfo.jokerUsed = false; // ジョーカーをリセット
+        successful.push(`${userInfo.name}(ぐっすり)`);
+        userInfo.jokerUsed = false; // ぐっすりをリセット
         continue;
       }
 
@@ -465,10 +374,15 @@ async function checkAllGroupReports() {
         groupInfo.bestStreak = groupInfo.currentStreak;
       }
 
-      message = `全員が時間通りに起きました！連続記録は${groupInfo.currentStreak}日目です🎉`;
+      message = BOT_CONFIG.messages.allSuccess.replace(
+        "{streak}",
+        groupInfo.currentStreak,
+      );
     } else if (failed.length > 0) {
       // 誰かが失敗
-      message = `⚠️ ${failed.join("さん、")}さんが寝坊しました…連続記録はリセットされます💀\n（${groupInfo.currentStreak}日でした）`;
+      message = BOT_CONFIG.messages.someoneFailure
+        .replace("{failedUsers}", failed.join("さん、"))
+        .replace("{oldStreak}", groupInfo.currentStreak);
       groupInfo.currentStreak = 0;
     }
 
@@ -488,16 +402,3 @@ async function checkAllGroupReports() {
   // 変更を保存
   saveData();
 }
-
-// サーバーの起動
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
-
-// Keep-alive機能を完全に無効化（コメントアウト）
-/*
-setInterval(() => {
-  http.get(`http://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`);
-}, 280000);
-*/
