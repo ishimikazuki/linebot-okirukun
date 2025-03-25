@@ -1,30 +1,9 @@
+// 必要なパッケージのインポート
 const express = require("express");
 const line = require("@line/bot-sdk");
-
-// LINE Bot SDK の設定
-const config = {
-  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.CHANNEL_SECRET,
-};
-
-const client = new line.Client(config);
-const app = express();
-
-// Webhookのエンドポイント
-app.post("/webhook", line.middleware(config), (req, res) => {
-  Promise.all(req.body.events.map(handleEvent))
-    .then((result) => res.json(result))
-    .catch((err) => {
-      console.error(err);
-      res.status(500).end();
-    });
-});
-
-// サーバーを起動
-const port = process.env.PORT || 3000;
-app.listen(port, "0.0.0.0", () => {
-  console.log(`Server is running on port ${port}`);
-});
+const cron = require("node-cron");
+const fs = require("fs");
+const path = require("path");
 
 // Bot設定・メッセージ
 const BOT_CONFIG = {
@@ -35,6 +14,7 @@ const BOT_CONFIG = {
     recordCheck: ["記録確認", "記録"],
     settingsCheck: ["設定確認", "設定"],
     help: ["使い方", "ヘルプ", "help"],
+    wakeupKeywords: ["起きた", "起床", "おはよう", "朝"],
   },
   messages: {
     wakeupSuccess: "{userName}さん、起床報告を記録しました✔️",
@@ -54,37 +34,121 @@ const BOT_CONFIG = {
     allSuccess: "全員が時間通りに起きました！連続記録は{streak}日目です🎉",
     someoneFailure:
       "⚠️ {failedUsers}さんが寝坊しました…連続記録はリセットされます💀\n（{oldStreak}日でした）",
-    helpText: `【使い方】
-・起床時間設定: 7時に起きる (7:00でも可)
-・起床報告: 「起きた！」とメッセージを送る
-・ぐっすり機能: ぐっすり (22時までに宣言で翌日パス、週1回のみ)
-・ぐっすり取消: ぐっすり取消
-・記録確認: 記録確認
-・設定確認: 設定確認
-・毎日12:00に全員の結果を集計します`,
+    helpText: `起きるくんneo使い方ガイド 
+
+📱 基本コマンド
+・「7時に起きる」「6:30に起きる」
+→ 起床時間を設定 
+
+・ 「起きた」「起床」「おはよう」「朝」
+→ 起床報告 
+
+・ 「ぐっすり」「明日パス」「明日休み」
+→ 翌日の早起きをパス（週1回まで）
+
+・ 「記録確認」
+→ 連続記録・最高記録を確認
+
+・ 「設定確認」「設定」
+→ 自分の起床時間を確認 
+
+・ 「使い方」「ヘルプ」「help」→ コマンド一覧、ヘルプを表示
+
+
+🔄 使い方の流れ
+起床時間を設定（例：「7時に起きる」）
+↓
+ 翌日設定時間までに起床報告（例：「おはよう！」） 
+↓
+12:00に結果集計→全員成功でチャレンジ達成。連続記録を目指そう！
+
+😴 ぐっすり機能（特別パス）
+使用条件：22:00より前に宣言必須 
+使用回数：週に1回まで 
+取り消し：「ぐっすり取消」で取消可能
+
+📊 集計について
+・毎日正午に自動集計 
+・全員成功→連続記録UP
+・誰か失敗→連続記録リセット
+
+⚠️ 注意点
+・起床報告は設定時間より前に必要 
+・同じ日の起床報告は1回まで 
+・起床時間未設定は集計対象外
+`,
     recordStatus: "現在の連続記録: {streak}日\n最高連続記録: {best}日",
     userSettings: "{userName}さんの起床時間: {hours}:{minutes}",
     unknownCommand:
       "コマンドが認識できませんでした。\n「使い方」でヘルプを表示します。",
+    testAggregation: "テスト用に集計を実行しました。",
+    testTimeSet: "テスト用時間を{hours}:{minutes}に設定しました。",
   },
 };
 
-// 環境変数の確認
-console.log(
-  "CHANNEL_ACCESS_TOKEN:",
-  process.env.CHANNEL_ACCESS_TOKEN ? "設定済み" : "未設定",
-);
-console.log(
-  "CHANNEL_SECRET:",
-  process.env.CHANNEL_SECRET ? "設定済み" : "未設定",
-);
+// 設定
+const config = {
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.CHANNEL_SECRET,
+};
 
-if (!config.channelAccessToken || !config.channelSecret) {
-  console.error("LINE Botの認証情報が設定されていません。");
-  process.exit(1);
+// データ保存用のパス
+const dataFilePath = "./.data/bot-data.json";
+
+// データの初期化
+let botData = {
+  users: {}, // ユーザー情報を格納
+  groups: {}, // グループ情報を格納
+  streakRecord: 0, // 最高連続記録
+  currentStreak: 0, // 現在の連続記録
+};
+
+// フォルダが存在しない場合は作成
+if (!fs.existsSync("./.data")) {
+  fs.mkdirSync("./.data");
 }
 
-// イベントハンドラの修正 - @Bot接頭辞を削除
+// データファイルが存在する場合は読み込む
+if (fs.existsSync(dataFilePath)) {
+  try {
+    botData = JSON.parse(fs.readFileSync(dataFilePath, "utf8"));
+  } catch (error) {
+    console.error("データ読み込みエラー:", error);
+  }
+}
+
+// テスト用の時間設定関数を追加
+function setTestTime(hours, minutes) {
+  const testDate = new Date();
+  testDate.setHours(hours, minutes, 0, 0);
+  return testDate;
+}
+
+// データを保存する関数
+function saveData() {
+  try {
+    fs.writeFileSync(dataFilePath, JSON.stringify(botData, null, 2));
+  } catch (error) {
+    console.error("データ保存エラー:", error);
+  }
+}
+
+const app = express();
+
+// LINE SDKの設定
+const client = new line.Client(config);
+
+// Webhookルート
+app.post("/webhook", line.middleware(config), (req, res) => {
+  Promise.all(req.body.events.map(handleEvent))
+    .then((result) => res.json(result))
+    .catch((err) => {
+      console.error(err);
+      res.status(500).end();
+    });
+});
+
+// イベントハンドラ
 async function handleEvent(event) {
   // メッセージイベント以外は無視
   if (event.type !== "message" || event.message.type !== "text") {
@@ -134,7 +198,37 @@ async function handleEvent(event) {
     };
   }
 
-  // 起床時間設定コマンド
+  // コマンド処理 - @Bot接頭辞を削除し、各種コマンドに対応
+
+  // テスト集計コマンド（開発者用）- 元のコマンド形式を維持
+  if (text.trim() === "@Bot テスト集計") {
+    // テスト用に即時集計を実行
+    checkAllGroupReports();
+
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: BOT_CONFIG.messages.testAggregation,
+    });
+  }
+
+  // テスト用時間設定 - 元のコマンド形式を維持
+  const testTimeMatch = text.match(/@Bot テスト時間(\d{1,2}):(\d{2})/);
+  if (testTimeMatch) {
+    const hours = parseInt(testTimeMatch[1]);
+    const minutes = parseInt(testTimeMatch[2]);
+
+    // グローバル変数に現在時刻を保存（本番環境では削除すること）
+    global.testTime = setTestTime(hours, minutes);
+
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: BOT_CONFIG.messages.testTimeSet
+        .replace("{hours}", hours)
+        .replace("{minutes}", minutes.toString().padStart(2, "0")),
+    });
+  }
+
+  // 起床時間設定コマンド - @Bot接頭辞を削除、明日なしでも対応
   const timeSettingMatch = text.match(BOT_CONFIG.commands.setWakeupTime);
   if (timeSettingMatch) {
     return handleTimeSettingCommand(
@@ -146,27 +240,27 @@ async function handleEvent(event) {
     );
   }
 
-  // ぐっすりコマンド
+  // ぐっすりコマンド - @Bot接頭辞削除
   if (BOT_CONFIG.commands.goodSleep.some((cmd) => text.trim() === cmd)) {
     return handleGoodSleepCommand(event, userId, groupId, userName);
   }
 
-  // ぐっすり取り消しコマンド
+  // ぐっすり取り消しコマンド - @Bot接頭辞削除
   if (BOT_CONFIG.commands.goodSleepCancel.some((cmd) => text.trim() === cmd)) {
     return handleGoodSleepCancelCommand(event, userId, groupId, userName);
   }
 
-  // 記録確認コマンド
+  // 記録確認コマンド - @Bot接頭辞削除、コマンド名変更
   if (BOT_CONFIG.commands.recordCheck.some((cmd) => text.trim() === cmd)) {
     return handleRecordCommand(event, userId, groupId);
   }
 
-  // 設定確認コマンド
+  // 設定確認コマンド - @Bot接頭辞削除、コマンド名変更
   if (BOT_CONFIG.commands.settingsCheck.some((cmd) => text.trim() === cmd)) {
     return handleSettingsCommand(event, userId, groupId, userName);
   }
 
-  // ヘルプコマンド
+  // ヘルプコマンド - @Bot接頭辞削除、コマンド名変更
   if (BOT_CONFIG.commands.help.some((cmd) => text.trim() === cmd)) {
     return handleHelpCommand(event);
   }
@@ -213,7 +307,61 @@ function handleTimeSettingCommand(
   });
 }
 
-// ぐっすりコマンド処理
+// 起床報告かどうかを判定
+function isWakeupReport(text) {
+  // 起床報告として認識するワード（BOT_CONFIGから取得）
+  return BOT_CONFIG.commands.wakeupKeywords.some((keyword) =>
+    text.includes(keyword),
+  );
+}
+
+// 起床報告処理関数
+function handleWakeupReport(event, userId, groupId, userName) {
+  const now = global.testTime || new Date();
+  const userInfo = botData.groups[groupId].users[userId];
+
+  // 起床時間が設定されていない場合
+  if (!userInfo.wakeupTime) {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: BOT_CONFIG.messages.noTimeSet,
+    });
+  }
+
+  // 同じ日に二回目の報告の場合
+  if (isSameDay(now, userInfo.lastReport) && userInfo.todayReported) {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: BOT_CONFIG.messages.wakeupAlreadyReported,
+    });
+  }
+
+  // 起床報告を記録
+  userInfo.lastReport = now;
+  userInfo.todayReported = true;
+  saveData();
+
+  return client.replyMessage(event.replyToken, {
+    type: "text",
+    text: BOT_CONFIG.messages.wakeupSuccess.replace("{userName}", userName),
+  });
+}
+
+// 同じ日かどうかをチェック
+function isSameDay(date1, date2) {
+  if (!date1 || !date2) return false;
+
+  const d1 = new Date(date1);
+  const d2 = new Date(date2);
+
+  return (
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate()
+  );
+}
+
+// ぐっすりコマンド処理関数
 function handleGoodSleepCommand(event, userId, groupId, userName) {
   const now = global.testTime || new Date();
   const userInfo = botData.groups[groupId].users[userId];
@@ -259,7 +407,7 @@ function handleGoodSleepCommand(event, userId, groupId, userName) {
   });
 }
 
-// ぐっすり取り消し処理
+// ぐっすり取り消し処理関数
 function handleGoodSleepCancelCommand(event, userId, groupId, userName) {
   const userInfo = botData.groups[groupId].users[userId];
 
@@ -327,39 +475,22 @@ function handleHelpCommand(event) {
   });
 }
 
-// 起床報告処理関数
-function handleWakeupReport(event, userId, groupId, userName) {
-  const now = global.testTime || new Date();
-  const userInfo = botData.groups[groupId].users[userId];
-
-  // 起床時間が設定されていない場合
-  if (!userInfo.wakeupTime) {
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: BOT_CONFIG.messages.noTimeSet,
-    });
-  }
-
-  // 同じ日に二回目の報告の場合
-  if (isSameDay(now, userInfo.lastReport) && userInfo.todayReported) {
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: BOT_CONFIG.messages.wakeupAlreadyReported,
-    });
-  }
-
-  // 起床報告を記録
-  userInfo.lastReport = now;
-  userInfo.todayReported = true;
-  saveData();
-
-  return client.replyMessage(event.replyToken, {
-    type: "text",
-    text: BOT_CONFIG.messages.wakeupSuccess.replace("{userName}", userName),
-  });
+// 週の開始日（日曜日）を取得
+function getWeekStartDate() {
+  const now = new Date();
+  const day = now.getDay(); // 0が日曜日、6が土曜日
+  const diff = now.getDate() - day;
+  const sunday = new Date(now.setDate(diff));
+  sunday.setHours(0, 0, 0, 0);
+  return sunday;
 }
 
-// 全グループのレポートをチェック（失敗時のメッセージカスタマイズ含む）
+// 毎日12時に実行するクロンジョブ
+cron.schedule("0 12 * * *", () => {
+  checkAllGroupReports();
+});
+
+// 全グループのレポートをチェック
 async function checkAllGroupReports() {
   const now = global.testTime || new Date();
 
@@ -445,3 +576,16 @@ async function checkAllGroupReports() {
   // 変更を保存
   saveData();
 }
+
+// サーバーの起動
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
+
+// Keep-alive機能を完全に無効化（コメントアウト）
+/*
+setInterval(() => {
+  http.get(`http://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`);
+}, 280000);
+*/
